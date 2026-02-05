@@ -1,0 +1,77 @@
+#!/bin/bash
+
+# Script to remove and prepare the SD Card to boot the ZCU208 board
+# We will prepare the SD Card to have two different partitions:
+## 1._ Partition 0 - 1 GB FAT 16/32
+## 2._ Partition 1 - 15GB ext4
+# Developed by Christian Rangel @ gradiant
+# Vigo, Spain 05/02/2026
+
+# Set up the device
+DRIVE="/dev/sda"
+
+# --- Configuración y Detección ---
+# Buscamos dispositivos con transporte USB que no sean el disco principal
+DEVICES=$(lsblk -dno NAME,TRAN,SIZE | grep "usb" | awk '{print $1}')
+
+echo "--- GESTOR DE PREPARACIÓN DE SD (GRAD0393) ---"
+
+# 1. Verificar si hay algún dispositivo conectado
+if [ -z "$DEVICES" ]; then
+    echo "ERROR: No se detectó ningún dispositivo USB/SD conectado."
+    echo "Por favor, inserta la tarjeta y vuelve a intentar."
+    exit 1
+fi
+
+# 2. Contar cuántos dispositivos USB hay
+COUNT=$(echo "$DEVICES" | wc -l)
+
+if [ "$COUNT" -gt 1 ]; then
+    echo "Se detectaron múltiples dispositivos USB:"
+    lsblk -dno NAME,SIZE,MODEL,TRAN | grep "usb"
+    echo "--------------------------------------------"
+    read -p "Introduce el nombre del dispositivo a usar (ej. sda, sdb): " USER_DRIVE
+    DRIVE="/dev/$USER_DRIVE"
+else
+    DRIVE="/dev/$DEVICES"
+    echo "Dispositivo detectado automáticamente: $DRIVE"
+    lsblk -dno NAME,SIZE,MODEL $DRIVE
+fi
+
+# 3. Validación de existencia final
+if [ ! -b "$DRIVE" ]; then
+    echo "ERROR: El dispositivo $DRIVE no es válido o no existe."
+    exit 1
+fi
+
+# 4. Confirmación de seguridad (Greene: Ley 29 - Planifique hasta el final)
+echo ""
+echo "¡ADVERTENCIA! Se borrarán TODOS los datos en $DRIVE"
+read -p "¿Estás seguro de que quieres continuar? (s/N): " confirm
+if [[ $confirm != "s" && $confirm != "S" ]]; then
+    echo "Operación cancelada por el usuario."
+    exit 1
+fi
+
+# 5. Desmontar automáticamente cualquier partición activa
+echo "Desmontando particiones en $DRIVE..."
+sudo umount ${DRIVE}* 2>/dev/null
+
+# 6. Particionado (1GB FAT32, Resto EXT4)
+echo "Particionando..."
+sudo sfdisk $DRIVE << EOF
+label: dos
+unit: sectors
+
+${DRIVE}1 : start=2048, size=2097152, type=c, bootable
+${DRIVE}2 : start=2099200, type=83
+EOF
+
+# 7. Formateo y Etiquetas
+echo "Aplicando formatos y etiquetas..."
+sudo mkfs.vfat -F 32 -n BOOT ${DRIVE}1
+sudo mkfs.ext4 -L rootfs ${DRIVE}2
+
+echo "--------------------------------------------"
+echo "¡SD PREPARADA EXITOSAMENTE EN $DRIVE!"
+lsblk -f $DRIVE
